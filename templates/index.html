@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0"/>
+  <title>⚽ Today's Football Predictions</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <header class="hero">
+    <div class="container">
+      <h1>⚽ Today's Football Predictions</h1>
+      <p id="todayDate">Loading date...</p>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="controls card">
+      <button id="refreshBtn" class="btn">🔄 Refresh Today's Fixtures</button>
+    </section>
+
+    <section class="fixtures-section">
+      <h2>📅 Today's Fixtures</h2>
+      <div id="fixturesList">
+        <div class="loading">Loading fixtures...</div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <p>Predictions for entertainment only. Data from API-Football.</p>
+    </div>
+  </footer>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
