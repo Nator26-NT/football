@@ -3,15 +3,24 @@ import time
 import json
 import os
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from typing import Dict, List, Optional
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
+# Define your app's target timezone (South Africa Standard Time)
+APP_TIMEZONE = ZoneInfo("Africa/Johannesburg")
+
+
+def get_today_local() -> date:
+    """Returns the current date in the app's target timezone (SAST)."""
+    return datetime.now(APP_TIMEZONE).date()
+
 
 def current_season(today: Optional[date] = None) -> int:
     """API-Football uses season start year. July+ = new season."""
-    d = today or date.today()
+    d = today or get_today_local()
     return d.year if d.month >= 7 else d.year - 1
 
 
@@ -158,7 +167,7 @@ class FootballAPI:
                              timezone: str = "Africa/Johannesburg"
                              ) -> Optional[Dict]:
         if target_date is None:
-            target_date = date.today().isoformat()
+            target_date = get_today_local().isoformat()
         return self.make_request(
             "fixtures",
             {"date": target_date, "timezone": timezone},

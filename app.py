@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta
 from flask import Flask, render_template, jsonify, request
 from flask_cors import CORS
 
-from api_client import FootballAPI, current_season
+from api_client import FootballAPI, current_season, get_today_local
 from european_leagues import (
     EuropeanLeaguesAPI, ALL_COMPETITIONS, ALL_LEAGUE_IDS, TOP5_LEAGUES, TEAMS_CACHE_PATH)
 from real_data_collector import RealDataCollector
@@ -266,7 +266,10 @@ def today_fixtures():
     """
     include_cups = request.args.get("include_cups") in ("1", "true", "yes")
     allowed = (ALL_LEAGUE_IDS if include_cups else TOP5_LEAGUE_IDS)
-    today = date.today().isoformat()
+    
+    # CHANGED: Use SAST-aware date instead of server date.today()
+    today = get_today_local().isoformat()
+    
     try:
         data = api_client.get_fixtures_by_date(today)
         if not data or not data.get("response"):
@@ -339,7 +342,9 @@ def predict():
 @app.route("/api/settle", methods=["POST"])
 def settle():
     try:
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        # CHANGED: Use SAST-aware date for yesterday calculation
+        yesterday = (get_today_local() - timedelta(days=1)).isoformat()
+        
         data = api_client.get_fixtures_by_date(yesterday)
         if not data or not data.get("response"):
             return jsonify({"settled": 0, "message": "No finished fixtures"})

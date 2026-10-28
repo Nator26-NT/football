@@ -1,15 +1,3 @@
-/**
- * app.js — Full frontend logic for European football prediction app.
- * Features:
- *  - Loads today's fixtures (top-5 leagues + domestic cups) grouped by league
- *  - Click a fixture to predict; prediction panel toggles inline
- *  - Shows prediction, confidence, xG, likely score, Team DNA cards
- *  - High-probability events (>= threshold, default 80%, cups 75%)
- *  - Reveal all events, SHAP feature impact, reasons
- *  - Cup badge + data-freshness warning
- *  - Auto-refresh button
- */
-
 document.addEventListener('DOMContentLoaded', () => {
     const refreshBtn = document.getElementById('refreshBtn');
     if (refreshBtn) refreshBtn.addEventListener('click', loadTodayFixtures);
@@ -32,7 +20,15 @@ async function loadTodayFixtures() {
         const data = await res.json();
 
         if (dateEl) {
-            dateEl.textContent = '\uD83D\uDCC5 ' + (data.date || '');
+            // Format the date returned by the server (which is now SAST-aware)
+            let displayDate = data.date || '';
+            try {
+                const d = new Date(data.date + 'T00:00:00'); // Force local parsing
+                const options = { day: 'numeric', month: 'short', year: 'numeric' };
+                displayDate = d.toLocaleDateString('en-GB', options);
+            } catch (e) {}
+
+            dateEl.textContent = '\uD83D\uDCC5 ' + displayDate;
         }
 
         if (!data.fixtures || data.fixtures.length === 0) {
