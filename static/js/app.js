@@ -1,18 +1,68 @@
+/* =========================================================
+   SIMPLE HASH ROUTER
+   Routes:
+     #/                        → home (fixtures list)
+     #/fixture/<fixture_id>    → prediction sub-page
+   ========================================================= */
+const App = {
+    fixturesCache: {}, // id → fixture object
+    predictionsCache: {}, // id → prediction payload
+    currentRoute: null,
+};
+
 document.addEventListener('DOMContentLoaded', () => {
-    const refreshBtn = document.getElementById('refreshBtn');
-    if (refreshBtn) refreshBtn.addEventListener('click', loadTodayFixtures);
-    loadTodayFixtures();
+    window.addEventListener('hashchange', route);
+    route();
 });
 
-/* --------------------------------------------------------------
- * Fixtures loader
- * -------------------------------------------------------------- */
+async function route() {
+    const hash = location.hash || '#/';
+    const app = document.getElementById('app');
+    if (!app) return;
+
+    // fixture sub-page
+    const m = hash.match(/^#\/fixture\/(\d+)/);
+    if (m) {
+        App.currentRoute = 'fixture';
+        await renderFixturePage(app, m[1]);
+        return;
+    }
+
+    // home
+    App.currentRoute = 'home';
+    await renderHome(app);
+}
+
+/* =========================================================
+   HOME PAGE
+   ========================================================= */
+async function renderHome(app) {
+    app.innerHTML = `
+        <section class="controls">
+          <button id="refreshBtn" class="btn" type="button">
+            <span aria-hidden="true">🔄</span> Refresh Today's Fixtures
+          </button>
+        </section>
+        <section class="fixtures-section" aria-label="Fixtures list">
+          <h2 class="section-title">📅 Today's Fixtures</h2>
+          <div id="fixturesList">
+            <div class="loading">Loading today’s fixtures…</div>
+          </div>
+        </section>
+    `;
+
+    document.getElementById('refreshBtn')
+        .addEventListener('click', loadTodayFixtures);
+
+    await loadTodayFixtures();
+}
+
 async function loadTodayFixtures() {
     const list = document.getElementById('fixturesList');
     const dateEl = document.getElementById('todayDate');
     if (!list) return;
 
-    list.innerHTML = '<div class="loading">Loading today\'s fixtures...</div>';
+    list.innerHTML = '<div class="loading">Loading today’s fixtures…</div>';
 
     try {
         const res = await fetch('/api/today-fixtures');
@@ -20,15 +70,16 @@ async function loadTodayFixtures() {
         const data = await res.json();
 
         if (dateEl) {
-            // Format the date returned by the server (which is now SAST-aware)
             let displayDate = data.date || '';
             try {
-                const d = new Date(data.date + 'T00:00:00'); // Force local parsing
-                const options = { day: 'numeric', month: 'short', year: 'numeric' };
-                displayDate = d.toLocaleDateString('en-GB', options);
+                const d = new Date(data.date + 'T00:00:00');
+                displayDate = d.toLocaleDateString('en-GB', {
+                    day: 'numeric',
+                    month: 'short',
+                    year: 'numeric'
+                });
             } catch (e) {}
-
-            dateEl.textContent = '\uD83D\uDCC5 ' + displayDate;
+            dateEl.textContent = '📅 ' + displayDate;
         }
 
         if (!data.fixtures || data.fixtures.length === 0) {
@@ -37,6 +88,11 @@ async function loadTodayFixtures() {
             return;
         }
 
+        // Cache fixtures for sub-page routing
+        data.fixtures.forEach(f => {
+            App.fixturesCache[f.fixture_id] = f;
+        });
+
         // Group by league
         const groups = {};
         data.fixtures.forEach(f => {
@@ -44,7 +100,6 @@ async function loadTodayFixtures() {
             (groups[key] = groups[key] || []).push(f);
         });
 
-        // Sort league keys: leagues first, cups second, alphabetical
         const leagueKeys = Object.keys(groups).sort((a, b) => {
             const aCup = groups[a][0].is_cup ? 1 : 0;
             const bCup = groups[b][0].is_cup ? 1 : 0;
@@ -55,7 +110,7 @@ async function loadTodayFixtures() {
         let html = '';
         leagueKeys.forEach(league => {
             const isCup = groups[league][0].is_cup;
-            const icon = isCup ? '\uD83C\uDFC6' : '\u26BD';
+            const icon = isCup ? '🏆' : '⚽';
             html += '<div class="league-group">' +
                 '<h3 class="league-title">' + icon + ' ' + esc(league) +
                 (isCup ? '<span class="badge cup">CUP</span>' : '') +
@@ -65,7 +120,6 @@ async function loadTodayFixtures() {
         });
 
         list.innerHTML = html;
-        attachCardHandlers(data.fixtures);
     } catch (err) {
         console.error(err);
         list.innerHTML = '<div class="loading">Failed to load fixtures: ' +
@@ -73,32 +127,26 @@ async function loadTodayFixtures() {
     }
 }
 
-/* --------------------------------------------------------------
- * Fixture card markup
- * -------------------------------------------------------------- */
 function buildFixtureCard(f) {
-    const id = 'fixture-' + f.fixture_id;
     const time = formatKickoff(f.date);
     const statusBadge = buildStatusBadge(f.status);
+    const href = '#/fixture/' + f.fixture_id;
 
-    return '' +
-        '<div class="fixture-wrapper" id="' + id + '">' +
-        '<div class="fixture-card" data-fixture-id="' + f.fixture_id + '">' +
+    return '<a class="fixture-card" href="' + href + '" ' +
+        'aria-label="' + esc(f.home_team) + ' vs ' + esc(f.away_team) + '">' +
         '<div class="fixture-teams">' +
-        '<span class="team-home">' + esc(f.home_team) + '</span>' +
+        '<span class="team-home" title="' + esc(f.home_team) + '">' +
+        esc(f.home_team) + '</span>' +
         '<span class="vs">vs</span>' +
-        '<span class="team-away">' + esc(f.away_team) + '</span>' +
+        '<span class="team-away" title="' + esc(f.away_team) + '">' +
+        esc(f.away_team) + '</span>' +
         '</div>' +
         '<div class="fixture-meta">' +
-        '<span>\uD83C\uDFDF\uFE0F ' + esc(f.venue || 'TBA') + '</span>' +
-        '<span>\u23F0 ' + esc(time) + ' ' + statusBadge + '</span>' +
+        '<span>🏟️ ' + esc(f.venue || 'TBA') + '</span>' +
+        '<span>⏰ ' + esc(time) + ' ' + statusBadge + '</span>' +
         '</div>' +
-        (f.round ? '<div class="fixture-round">' + esc(f.round) + '</div>' : '') +
-        '<div class="fixture-hint">\uD83D\uDC46 Tap to predict</div>' +
-        '</div>' +
-        '<div class="prediction-panel hidden" id="panel-' +
-        f.fixture_id + '"></div>' +
-        '</div>';
+        '<div class="fixture-hint"><span>Tap for prediction</span><span>→</span></div>' +
+        '</a>';
 }
 
 function buildStatusBadge(status) {
@@ -121,296 +169,351 @@ function formatKickoff(isoDate) {
     if (!isoDate) return '';
     try {
         const dt = new Date(isoDate);
-        const hh = String(dt.getHours()).padStart(2, '0');
-        const mm = String(dt.getMinutes()).padStart(2, '0');
-        return hh + ':' + mm;
+        return String(dt.getHours()).padStart(2, '0') + ':' +
+            String(dt.getMinutes()).padStart(2, '0');
     } catch {
         return isoDate;
     }
 }
 
-/* --------------------------------------------------------------
- * Card click handlers
- * -------------------------------------------------------------- */
-function attachCardHandlers(allFixtures) {
-    const map = {};
-    allFixtures.forEach(f => { map[f.fixture_id] = f; });
+/* =========================================================
+   FIXTURE PREDICTION SUB-PAGE (Betway-style)
+   ========================================================= */
+async function renderFixturePage(app, fixtureId) {
+    const id = String(fixtureId);
+    let fixture = App.fixturesCache[id];
 
-    document.querySelectorAll('.fixture-card').forEach(card => {
-        card.addEventListener('click', () => {
-            const id = card.dataset.fixtureId;
-            const fixture = map[id];
-            const panel = document.getElementById('panel-' + id);
-            if (!fixture || !panel) return;
+    // If user deep-linked and cache is empty, fetch today's fixtures first
+    if (!fixture) {
+        app.innerHTML = '<div class="loading">Loading fixture…</div>';
+        try {
+            const res = await fetch('/api/today-fixtures');
+            const data = await res.json();
+            (data.fixtures || []).forEach(f => {
+                App.fixturesCache[f.fixture_id] = f;
+            });
+            fixture = App.fixturesCache[id];
+        } catch (e) { /* ignore */ }
+    }
 
-            if (!panel.classList.contains('hidden')) {
-                panel.classList.add('hidden');
-                card.classList.remove('active');
-                return;
+    if (!fixture) {
+        app.innerHTML = `
+            <div class="pred-page">
+              <div class="back-bar">
+                <a class="back-btn" href="#/"><span aria-hidden="true">←</span> Back to fixtures</a>
+              </div>
+              <div class="low-confidence">
+                <div class="lc-title">Fixture not found</div>
+                <div class="lc-text">Try refreshing the fixtures list.</div>
+              </div>
+            </div>`;
+        return;
+    }
+
+    // Predict (cached)
+    let prediction = App.predictionsCache[id];
+    if (!prediction) {
+        app.innerHTML = renderFixtureShell(fixture, null);
+        attachBackHandler();
+        try {
+            const res = await fetch('/api/predict', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    home_team: fixture.home_team,
+                    away_team: fixture.away_team,
+                    home_id: fixture.home_id,
+                    away_id: fixture.away_id,
+                    fixture_id: fixture.fixture_id,
+                    league: fixture.league,
+                    league_id: fixture.league_id,
+                    kickoff: fixture.date,
+                    timestamp: fixture.timestamp,
+                    is_cup: !!fixture.is_cup,
+                    referee: fixture.referee
+                })
+            });
+            if (!res.ok) {
+                const errBody = await res.json().catch(() => ({}));
+                throw new Error(errBody.error || ('HTTP ' + res.status));
             }
-
-            card.classList.add('active');
-            panel.classList.remove('hidden');
-            panel.innerHTML = '<div class="loading">Calculating prediction...</div>';
-            predictMatch(fixture, panel);
-        });
-    });
-}
-
-/* --------------------------------------------------------------
- * Prediction request
- * -------------------------------------------------------------- */
-async function predictMatch(fixture, panel) {
-    try {
-        const res = await fetch('/api/predict', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                home_team: fixture.home_team,
-                away_team: fixture.away_team,
-                home_id: fixture.home_id,
-                away_id: fixture.away_id,
-                fixture_id: fixture.fixture_id,
-                league: fixture.league,
-                league_id: fixture.league_id,
-                kickoff: fixture.date,
-                timestamp: fixture.timestamp,
-                is_cup: !!fixture.is_cup,
-                referee: fixture.referee
-            })
-        });
-
-        if (!res.ok) {
-            const errBody = await res.json().catch(() => ({}));
-            throw new Error(errBody.error || ('HTTP ' + res.status));
+            prediction = await res.json();
+            App.predictionsCache[id] = prediction;
+        } catch (err) {
+            console.error(err);
+            app.innerHTML = renderFixtureShell(fixture, null, err.message);
+            attachBackHandler();
+            return;
         }
-
-        const p = await res.json();
-        panel.innerHTML = buildPredictionHtml(p);
-        attachRevealHandlers(panel);
-    } catch (err) {
-        console.error(err);
-        panel.innerHTML = '<div class="prediction-inner">' +
-            '<div class="low-confidence">' +
-            '<div class="lc-title">Prediction failed</div>' +
-            '<div class="lc-text">' + esc(err.message) + '</div>' +
-            '</div></div>';
     }
+
+    app.innerHTML = renderFixtureShell(fixture, prediction);
+    attachBackHandler();
+    attachRevealHandler();
 }
 
-function attachRevealHandlers(panel) {
-    panel.querySelectorAll('[data-reveal-events]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const block = panel.querySelector('.all-events-block');
-            if (!block) return;
-            const isHidden = block.classList.toggle('hidden');
-            btn.textContent = isHidden ? 'Show all events' : 'Hide extra events';
-        });
+function attachBackHandler() {
+    // No-op: back uses plain <a href="#/"> so no JS needed
+}
+
+function attachRevealHandler() {
+    const btn = document.querySelector('[data-reveal-events]');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+        const block = document.querySelector('.all-events-block');
+        if (!block) return;
+        const isHidden = block.classList.toggle('hidden');
+        btn.textContent = isHidden ? 'Show all events' : 'Hide extra events';
     });
 }
 
-/* --------------------------------------------------------------
- * Prediction markup
- * -------------------------------------------------------------- */
-function buildPredictionHtml(p) {
-    if (!p) return '<div class="loading">No data</div>';
+/* ---------- Main shell ---------- */
+function renderFixtureShell(f, p, errorMsg) {
+    const leagueLabel = (f.league || 'Football') +
+        (f.is_cup ? '<span class="badge cup">CUP</span>' : '');
+    const time = formatKickoff(f.date);
+    const statusBadge = buildStatusBadge(f.status);
+    const kickoffText = time ? ('⏰ ' + time) : '';
 
-    if (p.status === 'insufficient_confidence') {
-        return '<div class="prediction-inner">' +
-            '<div class="low-confidence">' +
-            '<div class="lc-title">No confident prediction</div>' +
-            '<div class="lc-text">' +
-            esc(p.reason || 'Signals below threshold') +
-            '</div></div></div>';
+    let bodyHtml = '';
+    if (errorMsg) {
+        bodyHtml = `<div class="low-confidence">
+            <div class="lc-title">Prediction failed</div>
+            <div class="lc-text">${esc(errorMsg)}</div>
+        </div>`;
+    } else if (!p) {
+        bodyHtml = `<div class="loading">Calculating prediction…</div>`;
+    } else if (p.status === 'insufficient_confidence') {
+        bodyHtml = `<div class="low-confidence">
+            <div class="lc-title">No confident prediction</div>
+            <div class="lc-text">${esc(p.reason || 'Signals below threshold')}</div>
+        </div>`;
+    } else {
+        bodyHtml = renderPredictionBody(p);
     }
 
-    if (p.error) {
-        return '<div class="prediction-inner">' +
-            '<div class="low-confidence">' +
-            '<div class="lc-title">Error</div>' +
-            '<div class="lc-text">' + esc(p.error) + '</div>' +
-            '</div></div>';
-    }
+    return `
+        <div class="pred-page">
+          <div class="back-bar">
+            <a class="back-btn" href="#/"><span aria-hidden="true">←</span> Back to fixtures</a>
+            <div class="breadcrumb">
+              <a href="#/">Home</a> / ${esc(f.league || 'Football')} / ${esc(f.home_team)} vs ${esc(f.away_team)}
+            </div>
+          </div>
 
+          <div class="match-header">
+            <div class="match-header-inner">
+              <div class="match-league">${leagueLabel}</div>
+              <div class="match-title">
+                <div class="match-team home">${esc(f.home_team)}</div>
+                <div class="match-score">
+                  VS
+                  <span class="vs-badge">${esc(f.round || 'Fixture')}</span>
+                </div>
+                <div class="match-team away">${esc(f.away_team)}</div>
+              </div>
+              <div class="match-meta">
+                <span>🏟️ ${esc(f.venue || 'TBA')}</span>
+                ${kickoffText ? '<span>' + esc(kickoffText) + '</span>' : ''}
+                ${statusBadge ? '<span>' + statusBadge + '</span>' : ''}
+                ${f.referee ? '<span>👤 ' + esc(f.referee) + '</span>' : ''}
+              </div>
+            </div>
+          </div>
+
+          ${bodyHtml}
+        </div>`;
+}
+
+/* ---------- Prediction body ---------- */
+function renderPredictionBody(p) {
     const pr = p.probabilities || {};
-    const h = ((pr['Home Win'] || 0) * 100).toFixed(1);
-    const d = ((pr['Draw'] || 0) * 100).toFixed(1);
-    const a = ((pr['Away Win'] || 0) * 100).toFixed(1);
+    const h = (pr['Home Win'] || 0) * 100;
+    const d = (pr['Draw'] || 0) * 100;
+    const a = (pr['Away Win'] || 0) * 100;
+    const conf = (p.confidence || 0) * 100;
     const threshold = p.event_threshold || 80;
-    const cupBadge = p.is_cup ?
-        ' <span class="badge cup">CUP</span>' : '';
 
-    // Score probabilities
-    let scoresHtml = '';
-    (p.score_probabilities || []).slice(0, 5).forEach(s => {
-        scoresHtml += '<div class="score-row">' +
-            '<span class="score-badge">' + esc(s.score) + '</span>' +
-            '<div class="score-bar">' +
-            '<div class="score-fill" style="width:' +
-            (s.probability * 100).toFixed(1) + '%"></div></div>' +
-            '<span class="score-pct">' +
-            (s.probability * 100).toFixed(1) + '%</span></div>';
-    });
+    const homeIsTop = p.prediction === 'Home Win';
+    const drawIsTop = p.prediction === 'Draw';
+    const awayIsTop = p.prediction === 'Away Win';
 
-    // Events
-    const evRow = (e, dim) =>
-        '<div class="event-row">' +
-        '<span class="event-name">' + esc(e.name) + '</span>' +
-        '<span class="event-confidence">' +
-        Number(e.confidence).toFixed(1) + '%</span>' +
-        '<div class="event-bar"><div class="event-fill' +
-        (dim ? ' dim' : '') + '" style="width:' +
-        Number(e.confidence) + '%"></div></div></div>';
+    // Primary banner
+    const primaryHtml = `
+        <div class="primary-banner">
+          <div>
+            <div class="pb-label">Primary Prediction</div>
+            <div class="pb-value">${esc(p.prediction)}</div>
+          </div>
+          <div class="pb-conf">
+            ${conf.toFixed(1)}%
+            <small>Confidence</small>
+          </div>
+        </div>`;
 
-    const highEvents = p.high_probability_events || [];
-    const allEvents = p.all_events || [];
-    let eventsHtml = highEvents.map(e => evRow(e, false)).join('');
-    let allEventsHtml = allEvents.map(e => evRow(e, true)).join('');
+    // 1-X-2 market
+    const marketHtml = `
+        <div class="market-grid">
+          <div class="market-card${homeIsTop ? ' is-top' : ''}">
+            <div class="m-label">Home</div>
+            <div class="m-value">${h.toFixed(1)}%</div>
+            <div class="m-price">${esc(p.home_team || 'Home')}</div>
+          </div>
+          <div class="market-card${drawIsTop ? ' is-top' : ''}">
+            <div class="m-label">Draw</div>
+            <div class="m-value">${d.toFixed(1)}%</div>
+            <div class="m-price">Match ends level</div>
+          </div>
+          <div class="market-card${awayIsTop ? ' is-top' : ''}">
+            <div class="m-label">Away</div>
+            <div class="m-value">${a.toFixed(1)}%</div>
+            <div class="m-price">${esc(p.away_team || 'Away')}</div>
+          </div>
+        </div>`;
 
-    // Reasons
-    let reasonsHtml = '';
-    (p.reasons || []).forEach(r => {
-        reasonsHtml += '<li>' + esc(r) + '</li>';
-    });
-
-    // Attributions
-    let attributionsHtml = '';
-    (p.attributions || []).forEach(at => {
-        const cls = at.impact >= 0 ? 'pos' : 'neg';
-        const pct = Math.abs(at.impact * 100).toFixed(1);
-        attributionsHtml += '<div class="attribution-row">' +
-            '<span class="attr-label">' + esc(at.label) + '</span>' +
-            '<div class="attr-bar"><div class="attr-fill ' + cls +
-            '" style="width:' + pct + '%"></div></div>' +
-            '<span class="attr-value ' + cls + '">' +
-            (at.impact >= 0 ? '+' : '-') + pct + '%</span></div>';
-    });
-
-    // Data freshness warning
+    // Data warning
     let dataWarning = '';
     if (p.data_age_sec && p.data_age_sec > 3600) {
         const hours = (p.data_age_sec / 3600).toFixed(1);
-        dataWarning = '<div class="data-warning">\u26A0 Data is ' +
-            hours + 'h old — prediction reliability reduced</div>';
+        dataWarning = `<div class="data-warning">⚠ Data is ${hours}h old — prediction reliability reduced</div>`;
     }
 
-    // Team DNA cards
+    // DNA comparison
     const dna = p.team_dna || { home: {}, away: {} };
-    const dnaCard = (name, t) => {
+    const dnaCol = (name, t) => {
         const style = (t.style || 'balanced').replace(/_/g, ' ');
-        return '<div class="tactical-card">' +
-            '<div class="tactical-card-title">' + esc(name) + '</div>' +
-            '<div class="tactical-row"><span>Formation</span><strong>' +
-            esc(t.formation || '—') + '</strong></div>' +
-            '<div class="tactical-row"><span>Style</span><strong>' +
-            esc(style) + '</strong></div>' +
-            '<div class="tactical-row"><span>Aggression</span><strong>' +
-            ((t.aggression || 0) * 100).toFixed(0) + '%</strong></div>' +
-            '<div class="tactical-row"><span>Discipline</span><strong>' +
-            ((t.discipline || 0) * 100).toFixed(0) + '%</strong></div>' +
-            '<div class="tactical-row"><span>Home Boost</span><strong>' +
-            ((t.home_boost || 0) * 100).toFixed(0) + '%</strong></div>' +
-            '</div>';
+        return `<div class="dna-side">
+            <div class="dna-team" title="${esc(name)}">${esc(name)}</div>
+            <div class="dna-row"><span>Formation</span><strong>${esc(t.formation || '—')}</strong></div>
+            <div class="dna-row"><span>Style</span><strong>${esc(style)}</strong></div>
+            <div class="dna-row"><span>Aggression</span><strong>${((t.aggression || 0) * 100).toFixed(0)}%</strong></div>
+            <div class="dna-row"><span>Discipline</span><strong>${((t.discipline || 0) * 100).toFixed(0)}%</strong></div>
+            <div class="dna-row"><span>Home Boost</span><strong>${((t.home_boost || 0) * 100).toFixed(0)}%</strong></div>
+        </div>`;
     };
+    const dnaHtml = `
+        <div class="content-card">
+          <div class="card-title">🧬 Tactical DNA</div>
+          <div class="dna-compare">
+            ${dnaCol(p.home_team, dna.home)}
+            <div class="dna-vs">VS</div>
+            ${dnaCol(p.away_team, dna.away)}
+          </div>
+        </div>`;
 
-    // Formation matchup notes
+    // Formation notes
     let formationNotesHtml = '';
-    if (p.formation_matchup &&
-        p.formation_matchup.notes &&
-        p.formation_matchup.notes.length) {
-        formationNotesHtml = '<div class="notes-block">' +
-            '<div class="pred-subtitle">\uD83E\uDDE9 Formation Matchup</div>' +
-            '<ul class="reasons-list">' +
-            p.formation_matchup.notes.map(n => '<li>' + esc(n) + '</li>').join('') +
-            '</ul></div>';
+    if (p.formation_matchup && p.formation_matchup.notes && p.formation_matchup.notes.length) {
+        formationNotesHtml = `
+            <div class="content-card">
+              <div class="card-title">🧩 Formation Matchup</div>
+              <ul class="reasons-list">
+                ${p.formation_matchup.notes.map(n => '<li>' + esc(n) + '</li>').join('')}
+              </ul>
+            </div>`;
     }
 
-    // Build final markup
-    return '<div class="prediction-inner">' +
+    // Probability bars
+    const probBarsHtml = `
+        <div class="content-card">
+          <div class="card-title">📈 Outcome Probabilities</div>
+          <div class="prob-bars">
+            <div class="prob-row"><span class="prob-label">Home</span>
+              <div class="prob-bar"><div class="prob-fill home" style="width:${h.toFixed(1)}%"></div><span class="prob-value">${h.toFixed(1)}%</span></div>
+            </div>
+            <div class="prob-row"><span class="prob-label">Draw</span>
+              <div class="prob-bar"><div class="prob-fill draw" style="width:${d.toFixed(1)}%"></div><span class="prob-value">${d.toFixed(1)}%</span></div>
+            </div>
+            <div class="prob-row"><span class="prob-label">Away</span>
+              <div class="prob-bar"><div class="prob-fill away" style="width:${a.toFixed(1)}%"></div><span class="prob-value">${a.toFixed(1)}%</span></div>
+            </div>
+          </div>
+        </div>`;
 
-        // Pills
-        '<div class="prediction-top">' +
-        '<div class="pred-pill"><span class="pred-label">Prediction</span>' +
-        '<span class="pred-value">' + esc(p.prediction) + cupBadge + '</span></div>' +
-        '<div class="pred-pill"><span class="pred-label">Confidence</span>' +
-        '<span class="pred-value">' +
-        ((p.confidence || 0) * 100).toFixed(1) + '%</span></div>' +
-        '<div class="pred-pill"><span class="pred-label">xG</span>' +
-        '<span class="pred-value">' +
-        (p.expected_goals ? p.expected_goals.home.toFixed(1) : '—') +
-        ' - ' +
-        (p.expected_goals ? p.expected_goals.away.toFixed(1) : '—') +
-        '</span></div>' +
-        '<div class="pred-pill"><span class="pred-label">Likely Score</span>' +
-        '<span class="pred-value">' +
-        (p.most_likely_score ? esc(p.most_likely_score.display) : '—') +
-        '</span></div>' +
-        '</div>' +
+    // Events
+    const evRow = (e, dim) => `
+        <div class="event-row">
+          <span class="event-name">${esc(e.name)}</span>
+          <span class="event-confidence">${Number(e.confidence).toFixed(1)}%</span>
+          <div class="event-bar"><div class="event-fill${dim ? ' dim' : ''}" style="width:${Number(e.confidence)}%"></div></div>
+        </div>`;
+    const high = p.high_probability_events || [];
+    const all = p.all_events || [];
+    const eventsHtml = `
+        <div class="content-card">
+          <div class="card-title">⚡ High-Probability Events (≥ ${threshold}%)</div>
+          <div class="events-list">
+            ${high.length ? high.map(e => evRow(e, false)).join('') : `<div class="empty-events">No events pass the ${threshold}% threshold for this fixture</div>`}
+          </div>
+          ${all.length > high.length ? `
+            <button class="reveal-btn" data-reveal-events type="button">Show all events</button>
+            <div class="all-events-block hidden">
+              <div class="events-list">${all.map(e => evRow(e, true)).join('')}</div>
+            </div>` : ''}
+        </div>`;
 
-        dataWarning +
+    // Score probabilities
+    const scores = (p.score_probabilities || []).slice(0, 5);
+    const scoresHtml = `
+        <div class="content-card">
+          <div class="card-title">📊 Top Score Probabilities</div>
+          <div class="scores-list">
+            ${scores.map(s => `
+              <div class="score-row">
+                <span class="score-badge">${esc(s.score)}</span>
+                <div class="score-bar"><div class="score-fill" style="width:${(s.probability * 100).toFixed(1)}%"></div></div>
+                <span class="score-pct">${(s.probability * 100).toFixed(1)}%</span>
+              </div>`).join('')}
+          </div>
+        </div>`;
 
-        // Team DNA
-        '<div class="tactical-grid">' +
-        dnaCard(p.home_team, dna.home) +
-        dnaCard(p.away_team, dna.away) +
-        '</div>' +
+    // Reasons
+    const reasons = p.reasons || [];
+    const reasonsHtml = reasons.length ? `
+        <div class="content-card">
+          <div class="card-title">🧠 Why This Prediction</div>
+          <ul class="reasons-list">
+            ${reasons.map(r => '<li>' + esc(r) + '</li>').join('')}
+          </ul>
+        </div>` : '';
 
-        formationNotesHtml +
+    // Attributions
+    const attrs = p.attributions || [];
+    const attrsHtml = attrs.length ? `
+        <div class="content-card">
+          <div class="card-title">🔍 Feature Impact (SHAP on XGB)</div>
+          <div class="attributions">
+            ${attrs.map(at => {
+                const cls = at.impact >= 0 ? 'pos' : 'neg';
+                const pct = Math.abs(at.impact * 100).toFixed(1);
+                return `<div class="attribution-row">
+                    <span class="attr-label">${esc(at.label)}</span>
+                    <div class="attr-bar"><div class="attr-fill ${cls}" style="width:${pct}%"></div></div>
+                    <span class="attr-value ${cls}">${at.impact >= 0 ? '+' : '-'}${pct}%</span>
+                  </div>`;
+            }).join('')}
+          </div>
+        </div>` : '';
 
-        // Probabilities
-        '<div class="pred-subtitle">\uD83D\uDCC8 Outcome Probabilities</div>' +
-        '<div class="prob-bars">' +
-        '<div class="prob-row"><span class="prob-label">Home</span>' +
-        '<div class="prob-bar"><div class="prob-fill home" style="width:' +
-        h + '%"></div><span class="prob-value">' + h + '%</span></div></div>' +
-        '<div class="prob-row"><span class="prob-label">Draw</span>' +
-        '<div class="prob-bar"><div class="prob-fill draw" style="width:' +
-        d + '%"></div><span class="prob-value">' + d + '%</span></div></div>' +
-        '<div class="prob-row"><span class="prob-label">Away</span>' +
-        '<div class="prob-bar"><div class="prob-fill away" style="width:' +
-        a + '%"></div><span class="prob-value">' + a + '%</span></div></div>' +
-        '</div>' +
-
-        // High-probability events
-        '<div class="pred-subtitle">\u26A1 High-Probability Events (\u2265 ' +
-        threshold + '%)</div>' +
-        '<div class="events-list">' +
-        (eventsHtml ||
-            '<div class="empty-events">No events pass the ' +
-            threshold + '% threshold for this fixture</div>') +
-        '</div>' +
-
-        // Reveal all events
-        ((allEvents.length > highEvents.length) ?
-            '<button class="reveal-btn" data-reveal-events>' +
-            'Show all events</button>' +
-            '<div class="all-events-block hidden">' +
-            '<div class="events-list">' + allEventsHtml + '</div></div>' :
-            '') +
-
-        // Score probabilities
-        '<div class="pred-subtitle">\uD83D\uDCCA Top Score Probabilities</div>' +
-        '<div class="scores-list">' + scoresHtml + '</div>' +
-
-        // Reasons
-        (reasonsHtml ?
-            '<div class="pred-subtitle">\uD83E\uDDE0 Why This Prediction</div>' +
-            '<ul class="reasons-list">' + reasonsHtml + '</ul>' :
-            '') +
-
-        // Attributions
-        (attributionsHtml ?
-            '<div class="pred-subtitle">\uD83D\uDD0D Feature Impact ' +
-            '(SHAP on XGB)</div>' +
-            '<div class="attributions">' + attributionsHtml + '</div>' :
-            '') +
-
-        '</div>';
+    return `
+        ${primaryHtml}
+        ${marketHtml}
+        ${dataWarning}
+        <div class="detail-grid">
+          ${dnaHtml}
+          ${probBarsHtml}
+        </div>
+        ${formationNotesHtml}
+        ${eventsHtml}
+        ${scoresHtml}
+        ${reasonsHtml}
+        ${attrsHtml}
+    `;
 }
 
-/* --------------------------------------------------------------
- * HTML escaping
- * -------------------------------------------------------------- */
+/* =========================================================
+   HELPERS
+   ========================================================= */
 function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
         '&': '&amp;',

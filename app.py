@@ -1,5 +1,6 @@
 import os
 import time
+import pandas as pd                      # <-- FIX: added top-level import
 from datetime import date, datetime, timedelta
 from flask import Flask, render_template, jsonify, request
 from flask_cors import CORS
@@ -64,14 +65,12 @@ def load_or_collect_training_data():
     global _training_df
     if _training_df is not None:
         return _training_df
-    import pandas as pd
     if os.path.exists(TRAINING_DF_PATH):
         try:
             _training_df = pd.read_parquet(TRAINING_DF_PATH)
             return _training_df
         except Exception as e:
             print(f"[data] parquet load failed: {e}")
-    # League-only collection (no cups by default for training)
     seasons = [current_season(), current_season() - 1]
     try:
         df = collector.collect_all(seasons, leagues=TOP5_LEAGUES)
@@ -100,7 +99,6 @@ def build_features_for_training(df):
             rows.append((feats, r["result"], r["timestamp"]))
         except Exception:
             continue
-    import pandas as pd
     if not rows:
         return pd.DataFrame()
     feat_cols = ["home_position", "away_position",
@@ -190,6 +188,44 @@ def make_prediction(home: str, away: str,
 
     scaled = outcome.pop("_scaled_features", None)
     xg = calculate_expected_goals(hs, aws, outcome, real_xg=real_xg)
+
+    # ---------- FIX: reconcile model label with xG ----------
+    if not real_xg:
+        xg_home_win = xg["home"] > xg["away"] + 0.15
+        xg_away_win = xg["away"] > xg["home"] + 0.15
+        xg_draw = abs(xg["home"] - xg["away"]) <= 0.15
+
+        model_pred = outcome["prediction"]
+        model_conf = outcome["confidence"]
+
+        if xg_away_win and model_pred == "Home Win":
+            outcome["prediction"] = "Away Win"
+            outcome["probabilities"] = {
+                "Home Win": round(outcome["probabilities"]["Home Win"] * 0.7, 3),
+                "Draw":    outcome["probabilities"]["Draw"],
+                "Away Win": round(1 - outcome["probabilities"]["Home Win"] * 0.7
+                                   - outcome["probabilities"]["Draw"], 3),
+            }
+            outcome["confidence"] = max(outcome["probabilities"].values())
+        elif xg_home_win and model_pred == "Away Win":
+            outcome["prediction"] = "Home Win"
+            outcome["probabilities"] = {
+                "Home Win": round(1 - outcome["probabilities"]["Away Win"] * 0.7
+                                   - outcome["probabilities"]["Draw"], 3),
+                "Draw":    outcome["probabilities"]["Draw"],
+                "Away Win": round(outcome["probabilities"]["Away Win"] * 0.7, 3),
+            }
+            outcome["confidence"] = max(outcome["probabilities"].values())
+        elif xg_draw and model_pred != "Draw":
+            outcome["prediction"] = "Draw"
+            outcome["probabilities"] = {
+                "Home Win": round(outcome["probabilities"]["Home Win"] * 0.75, 3),
+                "Draw":    round(0.25 + outcome["probabilities"]["Draw"] * 0.5, 3),
+                "Away Win": round(outcome["probabilities"]["Away Win"] * 0.75, 3),
+            }
+            outcome["confidence"] = max(outcome["probabilities"].values())
+    # ---------------------------------------------------------
+
     scores = generate_score_probabilities(xg)
     top = max(scores, key=lambda x: x["probability"])
 
@@ -260,16 +296,9 @@ def index():
 
 @app.route("/api/today-fixtures")
 def today_fixtures():
-    """
-    Default: only the 5 top leagues (exclude cups).
-    Use ?include_cups=1 to also return FA Cup, Copa del Rey, etc.
-    """
     include_cups = request.args.get("include_cups") in ("1", "true", "yes")
     allowed = (ALL_LEAGUE_IDS if include_cups else TOP5_LEAGUE_IDS)
-    
-    # CHANGED: Use SAST-aware date instead of server date.today()
     today = get_today_local().isoformat()
-    
     try:
         data = api_client.get_fixtures_by_date(today)
         if not data or not data.get("response"):
@@ -342,9 +371,7 @@ def predict():
 @app.route("/api/settle", methods=["POST"])
 def settle():
     try:
-        # CHANGED: Use SAST-aware date for yesterday calculation
         yesterday = (get_today_local() - timedelta(days=1)).isoformat()
-        
         data = api_client.get_fixtures_by_date(yesterday)
         if not data or not data.get("response"):
             return jsonify({"settled": 0, "message": "No finished fixtures"})
@@ -378,14 +405,12 @@ def recent():
 
 @app.route("/api/formations")
 def formations():
-    """Expose formation map for debugging / frontend validation."""
     from formation_map import TEAM_FORMATION_OVERRIDES
     return jsonify(TEAM_FORMATION_OVERRIDES)
 
 
 @app.route("/api/teams")
 def get_all_teams():
-    """Returns the cached list of all teams from top 5 leagues and cups."""
     teams = eu_api.load_teams_cache()
     if not teams:
         teams = eu_api.fetch_and_cache_all_teams()
@@ -408,11 +433,8 @@ def health():
 if __name__ == "__main__":
     init_db()
     ensure_model()
-    
-    # Ensure we have a cache of all teams before starting
     print("[startup] Checking team cache...")
     if not os.path.exists(TEAMS_CACHE_PATH):
         print("[startup] Fetching all teams from API (this may take a minute)...")
         eu_api.fetch_and_cache_all_teams()
-        
     app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)

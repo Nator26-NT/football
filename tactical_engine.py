@@ -4,7 +4,6 @@ from typing import Dict, List, Tuple
 
 from formation_map import lookup_formation
 
-# Expanded to cover all formations in 4-3-3.txt
 FORMATIONS: Dict[str, Dict[str, float]] = {
     "4-3-3":     {"defense": 0.80, "midfield": 0.85, "attack": 0.95, "width": 0.85, "press": 0.80},
     "4-2-3-1":   {"defense": 0.85, "midfield": 0.90, "attack": 0.85, "width": 0.75, "press": 0.75},
@@ -22,7 +21,6 @@ FORMATIONS: Dict[str, Dict[str, float]] = {
     "4-3-1-2":   {"defense": 0.78, "midfield": 0.92, "attack": 0.88, "width": 0.45, "press": 0.75},
     "3-1-4-2":   {"defense": 0.75, "midfield": 0.92, "attack": 0.88, "width": 0.70, "press": 0.80},
     "3-4-2-1":   {"defense": 0.80, "midfield": 0.90, "attack": 0.88, "width": 0.65, "press": 0.82},
-    # Niche systems seen in Bundesliga / Ligue 1
     "4-2-2-2":   {"defense": 0.78, "midfield": 0.88, "attack": 0.90, "width": 0.55, "press": 0.85},
     "2-4-4":     {"defense": 0.60, "midfield": 0.95, "attack": 0.98, "width": 0.85, "press": 0.90},
     "3-2-2-3":   {"defense": 0.72, "midfield": 0.92, "attack": 0.96, "width": 0.80, "press": 0.88},
@@ -41,8 +39,6 @@ STYLE_INTERACTIONS: Dict[Tuple[str, str], Tuple[float, float]] = {
     ("physical",    "technical"):  (1.15, 0.95),
 }
 
-# African legacy entries kept; European teams will now resolve via
-# formation_map lookup, so DEFAULT_DNA is only a last resort.
 TEAM_DNA: Dict[str, Dict] = {
     "Al Ahly":           {"style": "possession", "formation": "4-2-3-1", "aggression": 0.65, "discipline": 0.80, "home_boost": 0.15},
     "Zamalek":           {"style": "counter",    "formation": "4-3-3",   "aggression": 0.75, "discipline": 0.65, "home_boost": 0.12},
@@ -66,7 +62,6 @@ DEFAULT_DNA = {
     "aggression": 0.60, "discipline": 0.70, "home_boost": 0.10,
 }
 
-# Style inference from formation (used when only formation is known)
 _FORMATION_STYLE = {
     "5-4-1": "low_block", "5-3-2": "low_block",
     "4-5-1": "low_block", "4-1-4-1": "counter",
@@ -82,10 +77,8 @@ _FORMATION_STYLE = {
 
 
 def get_team_dna(team_name: str) -> Dict:
-    """Resolve DNA for a team. Priority: static table → formation lookup."""
     if team_name in TEAM_DNA:
         return dict(TEAM_DNA[team_name])
-
     form = lookup_formation(team_name, fallback=None)
     if form:
         style = _FORMATION_STYLE.get(form, "balanced")
@@ -97,7 +90,6 @@ def get_team_dna(team_name: str) -> Dict:
             "home_boost": 0.12,
             "_source": "formation_map",
         }
-
     return dict(DEFAULT_DNA)
 
 
@@ -129,11 +121,28 @@ def tactical_interaction(home_dna: Dict, away_dna: Dict) -> Tuple[float, float, 
     hm, am = STYLE_INTERACTIONS.get(pair, (1.0, 1.0))
     notes = []
     if pair in STYLE_INTERACTIONS:
-        favour = "home" if hm > am else ("away" if am > hm else "a balanced tempo")
-        notes.append(
-            f"{home_dna['style'].replace('_', ' ').title()} vs "
-            f"{away_dna['style'].replace('_', ' ').title()} typically favours {favour}"
-        )
+        # FIX: correctly attribute which side benefits
+        if hm > am:
+            favour = "home"
+            fav_team = home_dna.get("name", "the home side")
+        elif am > hm:
+            favour = "away"
+            fav_team = away_dna.get("name", "the away side")
+        else:
+            favour = "a balanced tempo"
+            fav_team = None
+        if fav_team:
+            notes.append(
+                f"{home_dna['style'].replace('_', ' ').title()} vs "
+                f"{away_dna['style'].replace('_', ' ').title()} typically "
+                f"favours {favour} ({fav_team})"
+            )
+        else:
+            notes.append(
+                f"{home_dna['style'].replace('_', ' ').title()} vs "
+                f"{away_dna['style'].replace('_', ' ').title()} typically "
+                f"favours {favour}"
+            )
     return hm, am, notes
 
 
@@ -147,24 +156,36 @@ def estimate_high_probability_events(
     a_xg = max(0.1, float(expected_goals.get("away", 1.0)))
     total_xg = h_xg + a_xg
 
+    # FIX: overdispersed negative-binomial tail for goal totals
+    r_disp = 4.0
     def p_over(threshold: float) -> float:
         k = int(math.floor(threshold))
-        cdf = sum(math.exp(-total_xg) * (total_xg ** i) / math.factorial(i)
-                  for i in range(k + 1))
+        mu = total_xg
+        p = r_disp / (r_disp + mu)
+        from math import lgamma, exp, log
+        cdf = 0.0
+        for i in range(k + 1):
+            cdf += exp(lgamma(i + r_disp) - lgamma(r_disp) - lgamma(i + 1)
+                       + r_disp * log(p) + i * log(1 - p))
         return max(0.0, min(1.0, 1.0 - cdf))
 
     expected_corners = 8.0 + total_xg * 1.1
     p_over_4_5_corners = 1 - math.exp(-max(0.1, expected_corners - 4.5))
+    # FIX: cap corner probabilities to reflect real-world variance
+    p_over_4_5_corners = min(p_over_4_5_corners, 0.95)
 
     aggression_avg = (home_dna["aggression"] + away_dna["aggression"]) / 2
     discipline_avg = (home_dna["discipline"] + away_dna["discipline"]) / 2
     base_cards = 2.0 + aggression_avg * 3.0 - discipline_avg * 1.0
     expected_cards = referee_avg_cards if referee_avg_cards else max(0.5, base_cards)
     p_at_least_one_card = 1 - math.exp(-expected_cards)
+    p_at_least_one_card = min(p_at_least_one_card, 0.97)
 
     home_share = h_xg / max(0.01, total_xg)
     p_home_1_corner = 1 - math.exp(-max(0.1, expected_corners * home_share * 0.6))
     p_away_1_corner = 1 - math.exp(-max(0.1, expected_corners * (1 - home_share) * 0.6))
+    p_home_1_corner = min(p_home_1_corner, 0.95)
+    p_away_1_corner = min(p_away_1_corner, 0.95)
 
     pos_w = {"possession": 0.60, "high_press": 0.55, "counter": 0.42,
              "direct": 0.45, "wing_play": 0.50, "physical": 0.48, "balanced": 0.50}
@@ -173,6 +194,7 @@ def estimate_high_probability_events(
     total_poss = max(0.01, home_poss + away_poss)
     p_home_possession = home_poss / total_poss
     p_away_card = 1 - math.exp(-max(0.1, expected_cards * 0.55))
+    p_away_card = min(p_away_card, 0.95)
 
     events = [
         {"name": "Over 0.5 Goals",              "confidence": round(p_over(0.5) * 100, 1)},

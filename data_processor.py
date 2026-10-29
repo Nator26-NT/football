@@ -60,10 +60,8 @@ class DataProcessor:
 
     def _resolve_dna(self, team: str,
                      dynamic_map: Optional[Dict[str, Dict]]) -> Dict:
-        """Priority: dynamic DNA > static table > formation map."""
         if dynamic_map and team in dynamic_map:
             dna = dict(dynamic_map[team])
-            # Ensure formation is real (dynamic DNA may still carry 4-4-2)
             mapped = lookup_formation(team, fallback=None)
             if mapped:
                 dna["formation"] = mapped
@@ -150,31 +148,48 @@ def calculate_expected_goals(home_strength: int, away_strength: int,
         hx = float(real_xg["home"])
         ax = float(real_xg["away"])
     else:
+        # FIX: stronger away-side bumps so underdog away teams are not ignored
         if home_strength == 2 and away_strength <= 1:
-            hx, ax = np.random.normal(1.8, 0.3), np.random.normal(0.8, 0.2)
+            hx, ax = np.random.normal(1.6, 0.35), np.random.normal(0.9, 0.25)
         elif away_strength == 2 and home_strength <= 1:
-            hx, ax = np.random.normal(0.9, 0.2), np.random.normal(1.7, 0.3)
+            hx, ax = np.random.normal(0.8, 0.25), np.random.normal(1.6, 0.35)
         elif home_strength == away_strength:
-            hx, ax = np.random.normal(1.3, 0.25), np.random.normal(1.1, 0.25)
+            hx, ax = np.random.normal(1.4, 0.3), np.random.normal(1.3, 0.3)
         else:
-            hx, ax = np.random.normal(1.4, 0.25), np.random.normal(1.0, 0.2)
-    if outcome_prediction and outcome_prediction.get("confidence", 0) > 0.7:
+            hx, ax = np.random.normal(1.5, 0.3), np.random.normal(1.2, 0.25)
+
+    # FIX: confidence-based adjustment only when model is confident AND xG
+    # does not already contradict it
+    if outcome_prediction and outcome_prediction.get("confidence", 0) > 0.55:
         p = outcome_prediction.get("prediction")
-        if p == "Home Win":
-            hx += 0.2; ax -= 0.1
-        elif p == "Away Win":
-            hx -= 0.1; ax += 0.2
+        if p == "Home Win" and hx >= ax - 0.2:
+            hx += 0.15; ax -= 0.05
+        elif p == "Away Win" and ax >= hx - 0.2:
+            hx -= 0.05; ax += 0.15
+
     return {"home": max(0.3, float(hx)), "away": max(0.3, float(ax))}
 
 
 def generate_score_probabilities(expected_goals: Dict,
-                                 max_goals: int = 5) -> List[Dict]:
+                                 max_goals: int = 6) -> List[Dict]:
     hx, ax = expected_goals["home"], expected_goals["away"]
+    # FIX: negative-binomial-style overdispersion for goal totals
+    # (r > 1 widens the distribution vs pure Poisson)
+    r_dispersion = 4.0
+    def _negbin_pmf(k: int, mu: float) -> float:
+        if mu <= 0:
+            return 1.0 if k == 0 else 0.0
+        r = r_dispersion
+        p = r / (r + mu)
+        from math import lgamma, exp, log
+        return exp(lgamma(k + r) - lgamma(r) - lgamma(k + 1)
+                   + r * log(p) + k * log(1 - p))
+
     scores = []
     for h in range(max_goals + 1):
         for a in range(max_goals + 1):
-            ph = math.exp(-hx) * (hx ** h) / math.factorial(h)
-            pa = math.exp(-ax) * (ax ** a) / math.factorial(a)
+            ph = _negbin_pmf(h, hx)
+            pa = _negbin_pmf(a, ax)
             p = ph * pa
             if p > 0.001:
                 scores.append({"score": (h, a), "probability": float(p)})

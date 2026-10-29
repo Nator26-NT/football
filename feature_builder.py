@@ -10,7 +10,6 @@ from api_client import FootballAPI
 
 
 def time_decay_weight(days_ago: float, half_life_days: float = 45.0) -> float:
-    """Exponential time decay: half-life in days."""
     return 0.5 ** (days_ago / half_life_days)
 
 
@@ -18,11 +17,9 @@ class FeatureBuilder:
     def __init__(self, api: Optional[FootballAPI] = None):
         self.api = api
 
-    # ---------- Real form from historical DataFrame ----------
     @staticmethod
     def _rolling_team_stats(df: pd.DataFrame, team_id: int,
                             before_ts: float, last_n: int = 10) -> Dict:
-        """Aggregate last-N matches ending BEFORE the given timestamp."""
         sub = df[((df["home_id"] == team_id) | (df["away_id"] == team_id))
                  & (df["timestamp"] < before_ts)]
         if sub.empty:
@@ -59,7 +56,6 @@ class FeatureBuilder:
     @staticmethod
     def _team_elo(df: pd.DataFrame, team_id: int, before_ts: float,
                   k: float = 20.0, base: float = 1500.0) -> float:
-        """Simple chronological ELO for opponent-strength adjustment."""
         hist = df[df["timestamp"] < before_ts].sort_values("timestamp")
         elo = {tid: base for tid in
                set(hist["home_id"]).union(set(hist["away_id"]))}
@@ -75,7 +71,6 @@ class FeatureBuilder:
             elo[a] = ea + k * ((1 - s_h) - (1 - exp_h))
         return elo.get(team_id, base)
 
-    # ---------- Main vector build ----------
     def build(self, home_id: int, away_id: int,
               home_name: str = "", away_name: str = "",
               df: Optional[pd.DataFrame] = None,
@@ -83,10 +78,6 @@ class FeatureBuilder:
               league_id: Optional[int] = None,
               home_strength: int = 0, away_strength: int = 0
               ) -> List[float]:
-        """
-        Returns 18-element vector matching model_trainer schema.
-        Uses real history when df is provided; else heuristic fallback.
-        """
         kickoff_ts = kickoff_ts or time.time()
 
         if df is not None and not df.empty:
@@ -98,9 +89,6 @@ class FeatureBuilder:
             hf = {"matches": 0}
             af = {"matches": 0}
             h_elo = a_elo = 1500.0
-
-        def safe(v, default):
-            return v if hf.get("matches") or af.get("matches") else default
 
         def fill(stats, strength):
             return {
@@ -116,11 +104,12 @@ class FeatureBuilder:
         h = fill(hf, home_strength)
         a = fill(af, away_strength)
 
-        # ELO-derived "position proxy"
-        h_pos = max(1, min(20, int(round(20 - (h_elo - 1300) / 40))))
-        a_pos = max(1, min(20, int(round(20 - (a_elo - 1300) / 40))))
-        h_pts = max(0, int(round((h_elo - 1300) * 0.2)))
-        a_pts = max(0, int(round((a_elo - 1300) * 0.2)))
+        # FIX: wider ELO -> position mapping so away teams are not
+        # automatically pushed to bottom of table.
+        h_pos = max(1, min(20, int(round(20 - (h_elo - 1250) / 35))))
+        a_pos = max(1, min(20, int(round(20 - (a_elo - 1250) / 35))))
+        h_pts = max(0, int(round((h_elo - 1250) * 0.2)))
+        a_pts = max(0, int(round((a_elo - 1250) * 0.2)))
 
         return [
             h_pos, a_pos, h_pts, a_pts,
